@@ -43,6 +43,8 @@ CONFIG_KEYS = [
     "attn_layer_period",
     "sliding_window",
     "sliding_window_size",
+    "layer_types",
+    "sliding_window_pattern",
     "num_local_experts",
     "n_routed_experts",
     "num_experts",
@@ -188,6 +190,12 @@ def _analyze(config: dict[str, Any], **sections: Any) -> None:
 @pytest.mark.parametrize("key", CONFIG_KEYS)
 def test_hostile_config_value(key: str, value: Any) -> None:
     _analyze({**BASE_CONFIG, key: value})
+
+
+@pytest.mark.parametrize("value", HOSTILE_VALUES, ids=repr)
+@pytest.mark.parametrize("key", ["layer_types", "sliding_window_pattern"])
+def test_hostile_sliding_attention_metadata(key: str, value: Any) -> None:
+    _analyze({**BASE_CONFIG, "sliding_window": 16, key: value})
 
 
 @pytest.mark.parametrize("value", HOSTILE_VALUES, ids=repr)
