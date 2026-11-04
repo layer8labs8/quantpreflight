@@ -350,6 +350,103 @@ def test_gemma2_alternates_sliding_and_global_layers() -> None:
     assert _kv_bytes(config) == _gib(2 * 8 * 8 * 100 * 2 * (1000 + CONTEXT) / 2)
 
 
+# Geometry from https://huggingface.co/openai/gpt-oss-20b/blob/main/config.json.
+GPT_OSS = {
+    "model_type": "gpt_oss",
+    "num_hidden_layers": 24,
+    "num_attention_heads": 64,
+    "num_key_value_heads": 8,
+    "head_dim": 64,
+    "hidden_size": 2880,
+    "max_position_embeddings": 131072,
+    "sliding_window": 128,
+    "layer_types": ["sliding_attention", "full_attention"] * 12,
+}
+
+
+def test_gpt_oss_counts_the_cache_of_its_twelve_global_layers() -> None:
+    expected = 2 * 8 * 64 * 2 * (12 * 128 + 12 * 131072)
+    assert _kv_bytes(GPT_OSS, context=131072) == _gib(expected) == 3.0
+
+
+@pytest.mark.parametrize("global_type", ["full_attention", "global_attention", "FULL_ATTENTION"])
+def test_global_layer_types_keep_the_full_context(global_type: str) -> None:
+    config = {**STANDARD, "sliding_window": 1000, "layer_types": [global_type, "sliding_attention"] * 4}
+    assert _kv_bytes(config) == _gib(2 * 8 * 100 * 2 * (4 * CONTEXT + 4 * 1000))
+
+
+@pytest.mark.parametrize(("pattern", "global_layers"), [(1, 8), (3, 2), (6, 1), (9, 0)])
+def test_gemma3_counts_only_each_complete_window_pattern(pattern: int, global_layers: int) -> None:
+    config = {**STANDARD, "model_type": "gemma3_text", "sliding_window": 1000, "sliding_window_pattern": pattern}
+    expected = 2 * 8 * 100 * 2 * (global_layers * CONTEXT + (8 - global_layers) * 1000)
+    assert _kv_bytes(config) == _gib(expected)
+
+
+def test_global_layer_types_take_precedence_over_the_window_pattern() -> None:
+    config = {
+        **STANDARD,
+        "sliding_window": 1000,
+        "layer_types": ["full_attention"] + ["sliding_attention"] * 7,
+        "sliding_window_pattern": 1,
+    }
+    assert _kv_bytes(config) == _gib(2 * 8 * 100 * 2 * (CONTEXT + 7 * 1000))
+
+
+def test_gemma2_explicit_global_layer_types_override_its_default_alternation() -> None:
+    config = {**STANDARD, "model_type": "gemma2", "sliding_window": 1000, "layer_types": ["sliding_attention"] * 8}
+    assert _kv_bytes(config) == _gib(2 * 8 * 8 * 100 * 2 * 1000)
+
+
+def test_mistral_without_sliding_metadata_keeps_every_layer_windowed() -> None:
+    config = {**STANDARD, "model_type": "mistral", "sliding_window": 1000}
+    assert _kv_bytes(config) == _gib(2 * 8 * 8 * 100 * 2 * 1000)
+
+
+def test_global_layer_types_do_not_inflate_contexts_shorter_than_the_window() -> None:
+    assert _kv_bytes(GPT_OSS, context=64) == _gib(2 * 24 * 8 * 64 * 2 * 64)
+
+
+@pytest.mark.parametrize(("tp", "concurrency", "dtype"), [(1, 1, None), (2, 4, None), (16, 2, "fp8")])
+def test_global_layers_keep_parallelism_precision_and_concurrency_scaling(tp: int, concurrency: int, dtype: str | None) -> None:
+    meta = _meta(GPT_OSS, QuantSpec(activation_dtype=dtype))
+    target = TargetSpec(tp=tp, context_len=131072, concurrency=concurrency)
+    kv_heads = {1: 8, 2: 4, 16: 1}[tp]
+    element_bytes = 1 if dtype == "fp8" else 2
+    expected = 2 * kv_heads * 64 * element_bytes * (12 * 128 + 12 * 131072) * concurrency
+    assert estimate_per_gpu_vram_gb(meta, GPT_OSS, target)[2] == _gib(expected)
+
+
+def test_global_layers_reach_the_vram_budget_finding() -> None:
+    meta = _meta(GPT_OSS, total_weight_bytes=16 * 1024**3)
+    report = analyze_checkpoint(meta, TargetSpec(gpu="L4", context_len=131072))
+    assert report.estimated_vram_per_gpu_gb == 22.53
+    assert any(f.rule_id == "QPF012" for f in report.findings)
+
+
+def test_gemma3_window_pattern_is_read_from_nested_text_config() -> None:
+    text = {
+        "model_type": "gemma3_text",
+        "num_hidden_layers": 26,
+        "num_attention_heads": 8,
+        "num_key_value_heads": 4,
+        "hidden_size": 2304,
+        "head_dim": 256,
+        "sliding_window": 1024,
+        "sliding_window_pattern": 6,
+    }
+    meta = _meta({"model_type": "gemma3", "text_config": text}, total_weight_bytes=1024**3)
+    report = analyze_checkpoint(meta, TargetSpec(vram_gb_override=3.0, context_len=131072))
+    # Four global layers and 22 sliding layers, plus the existing weight/runtime overheads.
+    expected = round(1.18 + 0.65 + 2 * 4 * 256 * 2 * (4 * 131072 + 22 * 1024) / 1024**3, 2)
+    assert report.estimated_vram_per_gpu_gb == expected
+    assert any(f.rule_id == "QPF012" for f in report.findings)
+
+
+def test_global_layer_count_never_exceeds_the_number_of_attention_layers() -> None:
+    config = {**STANDARD, "sliding_window": 1000, "layer_types": ["full_attention"] * 9}
+    assert _kv_bytes(config) <= _kv_bytes(STANDARD)
+
+
 def test_block_type_list_counts_attention_layers() -> None:
     config = {**STANDARD, "layers_block_type": ["attention", "mamba", "mamba", "mamba"]}
     assert _kv_bytes(config) == _gib(2 * 1 * 8 * 100 * 2 * CONTEXT)

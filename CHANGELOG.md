@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- KV-cache estimates now count global attention layers declared by `layer_types` or `sliding_window_pattern` at the full context length instead of capping every layer at the sliding window.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added

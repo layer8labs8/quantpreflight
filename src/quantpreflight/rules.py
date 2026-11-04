@@ -1099,12 +1099,21 @@ def estimate_per_gpu_vram_gb(
         # Check sliding-window attention
         sw = _pos_int(tcfg.get("sliding_window")) or _pos_int(tcfg.get("sliding_window_size"))
         if sw:
-            if model_type == "gemma2":
-                num_sliding = num_layers // 2
-                num_global = num_layers - num_sliding
-                eff_ctx = (num_sliding * min(ctx, sw) + num_global * ctx) / num_layers
+            layer_types = tcfg.get("layer_types")
+            pattern = _pos_int(tcfg.get("sliding_window_pattern"))
+            if isinstance(layer_types, list) and layer_types:
+                num_global = min(num_layers, sum(
+                    1 for kind in layer_types
+                    if isinstance(kind, str) and ("full" in kind.lower() or "global" in kind.lower())
+                ))
+            elif pattern:
+                num_global = num_layers // pattern
+            elif model_type == "gemma2":
+                num_global = num_layers - num_layers // 2
             else:
-                eff_ctx = min(ctx, sw)
+                num_global = 0
+            num_sliding = num_layers - num_global
+            eff_ctx = (num_sliding * min(ctx, sw) + num_global * ctx) / num_layers
         else:
             eff_ctx = ctx
 
