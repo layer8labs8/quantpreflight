@@ -57,6 +57,13 @@ def test_a_model_that_fits_is_ready_as_asked() -> None:
     assert plan.command == "vllm serve org/model"
 
 
+def test_setup_uses_tokenizer_context_cap_and_rope_scaling() -> None:
+    config = {**LLAMA, "max_position_embeddings": 4096, "rope_scaling": {"type": "linear", "factor": 4}}
+    meta = _meta(config=config, tokenizer_config={"model_max_length": 12000})
+    plan = plan_setup(meta, TargetSpec(gpu="H100", context_len=20000))
+    assert plan.context_len == 12000
+
+
 def test_heads_that_do_not_split_move_to_the_closest_gpu_count_with_fewer_gpus_on_a_tie() -> None:
     plan = plan_setup(_meta(10), TargetSpec(gpu="H100", tp=3))
     assert plan.status == "changed" and plan.tp == 2

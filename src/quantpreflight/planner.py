@@ -8,7 +8,7 @@ import shlex
 
 from .models import CheckpointMeta, Finding, ScanReport, SetupPlan, TargetSpec
 from .profiles import resolve_gpu_profile
-from .rules import _effective_text_config, _pos_int, analyze_checkpoint, estimate_per_gpu_vram_gb
+from .rules import _effective_text_config, analyze_checkpoint, context_limit, estimate_per_gpu_vram_gb
 
 TP_CHOICES = (1, 2, 4, 8)
 # They say a model is risky to load, not that it won't start
@@ -147,7 +147,7 @@ def plan_setup(
 ) -> SetupPlan:
     """Find the closest setup to `target` that clears every finding a setting can clear."""
     tcfg = _effective_text_config(meta.config)
-    limit = _pos_int(tcfg.get("max_position_embeddings"))
+    limit = context_limit(meta.config, meta.tokenizer_config)
     gpu = resolve_gpu_profile(target.gpu) if target.gpu else None
     vram = target.vram_gb_override if target.vram_gb_override is not None else (gpu.vram_gb if gpu else None)
     usable = vram * target.gpu_memory_utilization if vram else None
