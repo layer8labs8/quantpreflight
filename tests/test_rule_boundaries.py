@@ -9,7 +9,7 @@ import pytest
 from quantpreflight.formatters import _fmt_bytes, format_json_report, format_sarif_report, format_text_report
 from quantpreflight.models import CheckpointMeta, QuantSpec, Severity, TargetSpec, TensorSpec, TokenizerMeta
 from quantpreflight.profiles import load_advisories
-from quantpreflight.rules import analyze_checkpoint, estimate_per_gpu_vram_gb
+from quantpreflight.rules import analyze_checkpoint, context_limit, estimate_per_gpu_vram_gb
 
 LLAMA = {"architectures": ["LlamaForCausalLM"], "model_type": "llama"}
 AWQ4 = QuantSpec(method="awq", bits=4.0)
@@ -750,6 +750,20 @@ def test_qpf016_context_limit(context: int | None, limit: int | None, engine: st
 def test_qpf016_names_a_setting_that_works() -> None:
     report = analyze_checkpoint(_meta(config={**LLAMA, "max_position_embeddings": 2048}), TargetSpec(context_len=4096))
     assert report.findings[0].remediation == "Set --context-len to 2048 or lower."
+
+
+@pytest.mark.parametrize(
+    ("config", "tokenizer", "expected"),
+    [
+        ({"max_position_embeddings": 8192, "n_positions": 4096}, {}, 4096),
+        ({"max_position_embeddings": 8192, "model_max_length": 2048}, {}, 2048),
+        ({"max_position_embeddings": 8192}, {"model_max_length": 4096}, 4096),
+        ({"max_position_embeddings": 4096, "rope_scaling": {"type": "linear", "factor": 4}}, {}, 16384),
+        ({"max_position_embeddings": 4096, "rope_scaling": {"type": "yarn", "factor": 4}}, {}, 4096),
+    ],
+)
+def test_context_limit_matches_vllm_precedence(config: dict[str, Any], tokenizer: dict[str, Any], expected: int) -> None:
+    assert context_limit(config, tokenizer) == expected
 
 
 # Corrections from scanning 500 public models

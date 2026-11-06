@@ -134,6 +134,42 @@ def _effective_text_config(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+_CONTEXT_LENGTH_KEYS = ("max_position_embeddings", "n_positions", "max_seq_len", "seq_length")
+_ROPE_TYPES_WITHOUT_FACTOR = frozenset(
+    {"su", "longrope", "llama3", "yarn", "deepseek_yarn", "deepseek_llama_scaling"}
+)
+
+
+def context_limit(config: dict[str, Any], tokenizer_config: dict[str, Any] | None = None) -> int | None:
+    """Derive the serving context limit using vLLM-compatible config precedence."""
+    text_config = _effective_text_config(config)
+    limits: list[int] = []
+    for key in _CONTEXT_LENGTH_KEYS:
+        value = _pos_int(text_config.get(key))
+        if value is not None:
+            limits.append(value)
+    model_max = _pos_int(text_config.get("model_max_length"))
+    if model_max is not None:
+        limits.append(model_max)
+    if not limits:
+        return None
+    limit = min(limits)
+    rope = text_config.get("rope_scaling")
+    model_type = str(text_config.get("model_type", "")).lower()
+    architectures = text_config.get("architectures")
+    architecture_names = architectures if isinstance(architectures, list) else ()
+    is_gemma3 = model_type == "gemma3" or any("gemma3" in str(name).lower() for name in architecture_names)
+    if isinstance(rope, dict) and not is_gemma3:
+        rope_type = str(rope.get("rope_type", rope.get("type", "default"))).lower()
+        factor = rope.get("factor")
+        if rope_type not in _ROPE_TYPES_WITHOUT_FACTOR and isinstance(factor, (int, float)) and factor > 0:
+            limit = int(limit * factor)
+    tokenizer_max = _pos_int((tokenizer_config or {}).get("model_max_length"))
+    if tokenizer_max is not None:
+        limit = min(limit, tokenizer_max)
+    return limit
+
+
 def _to_int_set(val: Any) -> set[int]:
     if isinstance(val, int) and not isinstance(val, bool):
         return {val}
@@ -1347,8 +1383,8 @@ def _version_in_range(version: tuple[int, ...], item: dict[str, Any]) -> bool:
     return True
 
 
-def _check_qpf016_context_limit(tcfg: dict[str, Any], target: TargetSpec) -> list[Finding]:
-    limit = _pos_int(tcfg.get("max_position_embeddings"))
+def _check_qpf016_context_limit(meta: CheckpointMeta, target: TargetSpec) -> list[Finding]:
+    limit = context_limit(meta.config, meta.tokenizer_config)
     if target.engine != "vllm" or not target.context_len or not limit or target.context_len <= limit:
         return []
     return [
@@ -1460,7 +1496,7 @@ def analyze_checkpoint(
     findings.extend(_check_qpf013_safetensors_spans(meta))
     findings.extend(_check_qpf014_legacy_pickle_weights(meta))
     findings.extend(_check_qpf015_engine_advisories(tgt, engine_prof))
-    findings.extend(_check_qpf016_context_limit(tcfg, tgt))
+    findings.extend(_check_qpf016_context_limit(meta, tgt))
 
     est_vram, vram_findings = _check_qpf012_vram_budget(meta, tcfg, tgt, gpu_prof)
     findings.extend(vram_findings)
