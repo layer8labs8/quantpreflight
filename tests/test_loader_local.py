@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 import os
 from pathlib import Path
 from typing import Any
@@ -285,6 +286,12 @@ def test_invalid_json_names_the_file(tmp_path: Path) -> None:
         load_checkpoint_metadata(str(ckpt))
 
 
+# torch.save zip / classic pickle protocol magic (issue #6)
+_PICKLE_ZIP = b"PK\x03\x04rest"
+_PICKLE_PROTO = b"\x80\x02abc"
+_PICKLE_PROTO0 = pickle.dumps({"data": [1, 2]}, protocol=0)
+
+
 @pytest.mark.parametrize(
     ("name", "legacy"),
     [
@@ -301,7 +308,7 @@ def test_invalid_json_names_the_file(tmp_path: Path) -> None:
 )
 def test_legacy_weight_names(tmp_path: Path, name: str, legacy: bool) -> None:
     ckpt = _ckpt(tmp_path)
-    (ckpt / name).write_bytes(b"x")
+    (ckpt / name).write_bytes(_PICKLE_PROTO)
     assert (name in load_checkpoint_metadata(str(ckpt)).legacy_weight_files) is legacy
 
 
@@ -316,8 +323,8 @@ def test_pickle_only_folder(tmp_path: Path) -> None:
     ckpt = tmp_path / "ckpt"
     ckpt.mkdir()
     (ckpt / "config.json").write_text('{"vocab_size": 8, "quantization_config": {"quant_method": "gptq", "bits": 4}}', encoding="utf-8")
-    (ckpt / "b_model.bin").write_bytes(b"x")
-    (ckpt / "a_model.bin").write_bytes(b"x")
+    (ckpt / "b_model.bin").write_bytes(_PICKLE_ZIP)
+    (ckpt / "a_model.bin").write_bytes(_PICKLE_PROTO)
     (ckpt / "run.py").write_text("x", encoding="utf-8")
     meta = load_checkpoint_metadata(str(ckpt))
     assert meta.container_format == "pytorch_bin"
@@ -327,6 +334,27 @@ def test_pickle_only_folder(tmp_path: Path) -> None:
     assert meta.quant.method == "gptq"
     assert meta.tokenizer_meta.max_token_id == 7
     assert {f.rule_id for f in analyze_checkpoint(meta).findings} >= {"QPF014"}
+
+
+def test_metal_model_bin_is_not_treated_as_pickle(tmp_path: Path) -> None:
+    """gpt-oss Metal weights start with 'GPT-OSS …', not torch pickle magic (#6)."""
+    ckpt = _ckpt(tmp_path)
+    (ckpt / "metal_model.bin").write_bytes(b"GPT-OSS v1.0\x00weights")
+    (ckpt / "pytorch_model.bin").write_bytes(_PICKLE_ZIP)
+    meta = load_checkpoint_metadata(str(ckpt))
+    assert meta.legacy_weight_files == ("pytorch_model.bin",)
+    assert "metal_model.bin" not in meta.legacy_weight_files
+
+
+def test_protocol_0_pickle_is_treated_as_pickle(tmp_path: Path) -> None:
+    """Pickle protocol 0 starts with ASCII opcode bytes (issue #6), must still be flagged."""
+    ckpt = _ckpt(tmp_path)
+    (ckpt / "metal_model.bin").write_bytes(b"GPT-OSS v1.0\x00weights")
+    (ckpt / "zip_model.bin").write_bytes(_PICKLE_ZIP)
+    (ckpt / "pytorch_model.bin").write_bytes(_PICKLE_PROTO0)
+    meta = load_checkpoint_metadata(str(ckpt))
+    assert set(meta.legacy_weight_files) == {"pytorch_model.bin", "zip_model.bin"}
+    assert "metal_model.bin" not in meta.legacy_weight_files
 
 
 def test_added_tokens_decoder_reaches_the_vocab_rule(tmp_path: Path) -> None:

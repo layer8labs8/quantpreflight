@@ -34,6 +34,68 @@ class CheckpointLoadError(RuntimeError):
     """Raised when checkpoint headers or metadata cannot be located or fetched."""
 
 
+_LEGACY_WEIGHT_SUFFIXES = (".bin", ".pt", ".pth")
+_LEGACY_WEIGHT_NAME_HINTS = ("model", "pytorch", "weight", "consolidated")
+# Formats known not to be torch pickle (issue #6)
+_KNOWN_NON_PICKLE_PREFIXES: tuple[bytes, ...] = (b"GPT-OSS ", b"GGUF")
+
+
+def _looks_like_legacy_weight_name(filename: str) -> bool:
+    lower = filename.lower()
+    return lower.endswith(_LEGACY_WEIGHT_SUFFIXES) and any(
+        hint in lower for hint in _LEGACY_WEIGHT_NAME_HINTS
+    )
+
+
+def _header_is_known_non_pickle(header: bytes) -> bool:
+    """True when the first bytes match a format known not to be torch pickle."""
+    return any(header.startswith(prefix) for prefix in _KNOWN_NON_PICKLE_PREFIXES)
+
+
+def _local_legacy_weight_files(directory: Path, filenames: list[str]) -> list[str]:
+    """Name-filter then sniff magic bytes so Metal/other non-pickle formats are not flagged."""
+    found: list[str] = []
+    for fn in filenames:
+        if not _looks_like_legacy_weight_name(fn):
+            continue
+        path = directory / fn
+        try:
+            with path.open("rb") as handle:
+                header = handle.read(8)
+        except OSError:
+            # Unreadable files still warn — a scanner should err on the side of caution.
+            found.append(fn)
+            continue
+        if not _header_is_known_non_pickle(header):
+            found.append(fn)
+    return found
+
+
+def _remote_legacy_weight_files(
+    filenames: list[str],
+    *,
+    base_url: str,
+    token: str | None,
+    timeout: float,
+) -> list[str]:
+    candidates = [fn for fn in filenames if _looks_like_legacy_weight_name(fn)]
+    if not candidates:
+        return []
+
+    def _probe_candidate(fn: str) -> bool:
+        url = f"{base_url}/{fn}"
+        try:
+            header = _http_fetch_bytes(url, byte_range=(0, 7), token=token, timeout=timeout)
+        except Exception:
+            return True
+        return not _header_is_known_non_pickle(header)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(candidates))) as pool:
+        matches = list(pool.map(_probe_candidate, candidates))
+
+    return [fn for fn, is_pickle in zip(candidates, matches) if is_pickle]
+
+
 class _RangePreservingRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Preserve `Range` across cross-origin CDN redirects while stripping `Authorization`."""
 
@@ -290,11 +352,7 @@ def _load_local_checkpoint(target_path: Path, prefer_gguf: bool = False) -> Chec
     tok_json = _read_opt_json("tokenizer.json") if tok_json_path.is_file() else None
 
     all_dir_files = [p.name for p in target_path.iterdir() if p.is_file()]
-    legacy_files = [
-        fn for fn in all_dir_files
-        if fn.lower().endswith((".bin", ".pt", ".pth"))
-        and any(k in fn.lower() for k in ("model", "pytorch", "weight", "consolidated"))
-    ]
+    legacy_files = _local_legacy_weight_files(target_path, all_dir_files)
     custom_code_files = [
         fn for fn in all_dir_files
         if fn.lower().endswith(".py")
@@ -718,11 +776,9 @@ def load_checkpoint_metadata(
                 duplicate_tensors.append(tname)
             raw_entries[tname] = (entry, sname)
 
-    remote_legacy = [
-        fn for fn in remote_siblings
-        if fn.lower().endswith((".bin", ".pt", ".pth"))
-        and any(k in fn.lower() for k in ("model", "pytorch", "weight", "consolidated"))
-    ]
+    remote_legacy = _remote_legacy_weight_files(
+        remote_siblings, base_url=base_url, token=resolved_token, timeout=timeout
+    )
     remote_code = [
         fn for fn in remote_siblings
         if fn.lower().endswith(".py")

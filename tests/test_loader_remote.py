@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import pickle
 import json
 import urllib.error
 import urllib.request
@@ -177,12 +178,32 @@ def test_any_safetensors_files_are_used_as_a_fallback(hub: FakeHub) -> None:
     assert load_checkpoint_metadata("org/model").shard_files == ("one.safetensors", "two.SAFETENSORS")
 
 
+_PICKLE_ZIP = b"PK\x03\x04rest"
+_PICKLE_PROTO0 = pickle.dumps({"data": [1, 2]}, protocol=0)
+_METAL_BIN = b"GPT-OSS v1.0\x00weights"
+
+
 def test_remote_legacy_and_code_files_are_recorded(hub: FakeHub) -> None:
     hub.add("model.safetensors", _shard("a.weight"))
+    hub.add("pytorch_model.bin", _PICKLE_ZIP)
     hub.siblings("model.safetensors", "pytorch_model.bin", "training_args.bin", "modeling_x.py", "b.pt")
     meta = load_checkpoint_metadata("org/model")
     assert meta.legacy_weight_files == ("pytorch_model.bin",)
     assert meta.custom_code_files == ("modeling_x.py",)
+    assert (BASE + "/pytorch_model.bin") in hub.requests
+    assert (0, 7) in hub.ranges
+
+
+def test_remote_metal_model_bin_is_not_treated_as_pickle(hub: FakeHub) -> None:
+    hub.add("model.safetensors", _shard("a.weight"))
+    hub.add("metal_model.bin", _METAL_BIN)
+    hub.add("pytorch_model.bin", _PICKLE_PROTO0)
+    hub.add("zip_model.bin", _PICKLE_ZIP)
+    hub.siblings("model.safetensors", "metal_model.bin", "pytorch_model.bin", "zip_model.bin")
+    meta = load_checkpoint_metadata("org/model")
+    assert set(meta.legacy_weight_files) == {"pytorch_model.bin", "zip_model.bin"}
+    assert "metal_model.bin" not in meta.legacy_weight_files
+    assert (0, 7) in hub.ranges
 
 
 @pytest.mark.parametrize(
@@ -207,6 +228,7 @@ def test_bare_gguf_repository_picks_a_common_variant(hub: FakeHub, names: list[s
 
 def test_pickle_only_repository(hub: FakeHub) -> None:
     hub.add("config.json", {"vocab_size": 8, "quantization_config": {"quant_method": "gptq"}})
+    hub.add("pytorch_model.bin", _PICKLE_ZIP)
     hub.siblings("pytorch_model.bin", "run.py")
     meta = load_checkpoint_metadata("org/model")
     assert meta.container_format == "pytorch_bin"
@@ -214,6 +236,16 @@ def test_pickle_only_repository(hub: FakeHub) -> None:
     assert meta.custom_code_files == ("run.py",)
     assert meta.quant.method == "gptq"
     assert meta.tokenizer_meta.max_token_id == 7
+
+
+def test_unreadable_remote_legacy_candidate_is_still_counted(hub: FakeHub) -> None:
+    """When the first bytes cannot be fetched, keep warning (issue #6)."""
+    hub.add("config.json", {"vocab_size": 8})
+    hub.siblings("pytorch_model.bin", "run.py")
+    # No body for pytorch_model.bin → FakeHub 404 on the magic sniff.
+    meta = load_checkpoint_metadata("org/model")
+    assert meta.container_format == "pytorch_bin"
+    assert meta.legacy_weight_files == ("pytorch_model.bin",)
 
 
 def test_repository_with_nothing_to_read(hub: FakeHub) -> None:

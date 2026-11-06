@@ -118,7 +118,7 @@ def test_qpf014_safetensors_with_lingering_pickle_file(tmp_path: Path) -> None:
     mixed_dir.mkdir()
     (mixed_dir / "config.json").write_text('{"architectures": ["LlamaForCausalLM"]}', encoding="utf-8")
     (mixed_dir / "model.safetensors").write_bytes(build_safetensors_header_file({"embed": ("F16", [10, 10])}))
-    (mixed_dir / "pytorch_model.bin").write_bytes(b"legacy_pickle")
+    (mixed_dir / "pytorch_model.bin").write_bytes(b"PK\x03\x04mock_zip_pickle")
 
     meta = load_checkpoint_metadata(str(mixed_dir))
     assert meta.container_format == "safetensors"
