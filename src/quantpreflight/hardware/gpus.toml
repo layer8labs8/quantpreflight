@@ -28,6 +28,32 @@ supports_nvfp4 = false
 supports_marlin = true
 
 [[gpus]]
+id = "RTXA6000"
+aliases = ["rtx-a6000", "rtx a6000", "nvidia rtx a6000"]
+vendor = "nvidia"
+arch = "sm_86"
+compute_capability = 86
+vram_gb = 48.0
+supports_bf16 = true
+supports_fp8_w8a8 = false
+supports_fp8_block_scale = false
+supports_nvfp4 = false
+supports_marlin = true
+
+[[gpus]]
+id = "A40"
+aliases = ["nvidia a40"]
+vendor = "nvidia"
+arch = "sm_86"
+compute_capability = 86
+vram_gb = 48.0
+supports_bf16 = true
+supports_fp8_w8a8 = false
+supports_fp8_block_scale = false
+supports_nvfp4 = false
+supports_marlin = true
+
+[[gpus]]
 id = "A100-40GB"
 aliases = ["a100-40g", "a100_40gb"]
 vendor = "nvidia"

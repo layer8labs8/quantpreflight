@@ -152,7 +152,7 @@ Run `quantpreflight explain QPF006` for the details of any rule.
 | :--- | :--- |
 | Formats | AWQ, GPTQ, Compressed-Tensors, FP8, NVFP4, MXFP4, Marlin, AutoRound, bitsandbytes, BitNet, MLX, GGUF, Safetensors |
 | Engines | vLLM, SGLang, TensorRT-LLM, llama.cpp |
-| NVIDIA GPUs | T4, A10G, A100-40GB, A100, L4, L40S, RTX4090, H100, H200, B200, RTX5090, GB10 |
+| NVIDIA GPUs | T4, A10G, RTXA6000, A40, A100-40GB, A100, L4, L40S, RTX4090, H100, H200, B200, RTX5090, GB10 |
 | AMD GPUs | MI250X, MI300X, MI325X |
 | Model families | Llama, Mistral, Qwen, DeepSeek, Gemma, Phi, GLM, Mamba and hybrids, with a generic fallback for the rest |
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import metadata
+import re
 import shutil
 import subprocess
 
@@ -29,9 +30,13 @@ def _squash(text: str) -> str:
 
 def match_gpu_name(name: str, arch: str | None = None) -> str | None:
     """Match a device name such as `NVIDIA L40S` to a GPU profile, falling back to its architecture."""
-    # Longest names first, so an L40S isn't read as an L4
+    # Longest names first, so an L40S isn't read as an L4. For short IDs
+    # require a whole model token: an RTX A4000 must not match an A40.
+    normalized_name = _squash(name)
+    tokens = set(re.findall(r"[A-Z0-9]+", name.upper()))
     for gpu_id in sorted(load_gpu_profiles(), key=len, reverse=True):
-        if _squash(gpu_id) in _squash(name):
+        normalized_id = _squash(gpu_id)
+        if normalized_id in (tokens if len(normalized_id) <= 3 else normalized_name):
             return gpu_id
     if arch:
         try:
