@@ -323,6 +323,44 @@ def test_list_rules_shows_every_rule(capsys: pytest.CaptureFixture[str]) -> None
     assert "[CRITICAL]" in output
 
 
+def test_list_gpus_json_includes_every_profile_field(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["list-gpus", "--format", "json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    profiles = json.loads(captured.out)
+    ids = [profile["id"] for profile in profiles]
+    assert ids == sorted(set(ids))
+    h100 = next(profile for profile in profiles if profile["id"] == "H100")
+    assert set(h100) == {
+        "id", "aliases", "vendor", "arch", "compute_capability", "vram_gb",
+        "supports_bf16", "supports_fp8_w8a8", "supports_fp8_block_scale",
+        "supports_nvfp4", "supports_marlin",
+    }
+    assert h100["arch"] == "sm_90"
+    assert h100["vram_gb"] == 80.0
+    assert h100["supports_bf16"] is True
+    assert "sm_90" in h100["aliases"]
+
+
+def test_list_rules_json_preserves_the_rule_catalog(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["list-rules", "--format", "json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    expected = [
+        {"id": rule_id, "severity": severity.value, "title": title, "description": description}
+        for rule_id, (severity, title, description) in sorted(RULE_CATALOG.items())
+    ]
+    assert json.loads(captured.out) == expected
+
+
+@pytest.mark.parametrize("command", ["list-gpus", "list-rules"])
+def test_list_explicit_text_matches_default(command: str, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([command]) == 0
+    default = capsys.readouterr()
+    assert main([command, "--format", "text"]) == 0
+    assert capsys.readouterr() == default
+
+
 # Newer options
 
 

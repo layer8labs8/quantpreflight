@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
+import json
 import os
 import pathlib
 import sys
@@ -181,15 +183,20 @@ def _build_parser() -> argparse.ArgumentParser:
     explain = sub.add_parser("explain", help="Show what a rule means.")
     explain.add_argument("rule", help="Rule ID, such as QPF006.")
 
-    sub.add_parser("list-gpus", help="List bundled GPU hardware profiles.")
-    sub.add_parser("list-rules", help="List all pre-flight rules.")
+    list_gpus = sub.add_parser("list-gpus", help="List bundled GPU hardware profiles.")
+    list_rules = sub.add_parser("list-rules", help="List all pre-flight rules.")
+    for listing in (list_gpus, list_rules):
+        listing.add_argument("--format", choices=["text", "json"], default="text", help="Output format (default: text).")
     sub.add_parser("validate-profiles", help="Validate all TOML architecture and hardware profiles.")
 
     return parser
 
 
-def _cmd_list_gpus() -> int:
+def _cmd_list_gpus(output_format: str) -> int:
     gpus = load_gpu_profiles()
+    if output_format == "json":
+        print(json.dumps([asdict(gpus[gid]) for gid in sorted(gpus)], indent=2))
+        return 0
     print(f"{'GPU':<12} {'Vendor':<8} {'Arch':<8} {'VRAM':<10} {'BF16':<6} {'FP8':<6} {'BlkFP8':<8} {'NVFP4':<6}")
     print("-" * 72)
     for gid in sorted(gpus.keys()):
@@ -202,8 +209,15 @@ def _cmd_list_gpus() -> int:
     return 0
 
 
-def _cmd_list_rules() -> int:
-    for rid, (sev, title, desc) in sorted(RULE_CATALOG.items()):
+def _cmd_list_rules(output_format: str) -> int:
+    rules = sorted(RULE_CATALOG.items())
+    if output_format == "json":
+        print(json.dumps([
+            {"id": rid, "severity": sev.value, "title": title, "description": desc}
+            for rid, (sev, title, desc) in rules
+        ], indent=2))
+        return 0
+    for rid, (sev, title, desc) in rules:
         print(f"{rid} [{sev.value.upper():<8}] {title}")
         print(f"    {desc}")
     return 0
@@ -314,9 +328,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 0
     if args.command == "list-gpus":
-        return _cmd_list_gpus()
+        return _cmd_list_gpus(args.format)
     if args.command == "list-rules":
-        return _cmd_list_rules()
+        return _cmd_list_rules(args.format)
     if args.command == "explain":
         return _cmd_explain(args.rule)
     if args.command == "validate-profiles":

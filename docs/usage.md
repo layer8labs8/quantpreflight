@@ -71,8 +71,8 @@ Exit codes: `0` means nothing reached the `--fail-on` level, `1` means something
 | :--- | :--- |
 | `quantpreflight suggest <model>` | Rank the quantized versions of a model that start. It takes the same target options as `check`, plus `--limit` |
 | `quantpreflight explain QPF006` | Explain a rule |
-| `quantpreflight list-rules` | List every rule |
-| `quantpreflight list-gpus` | List GPUs and their capabilities |
+| `quantpreflight list-rules [--format json]` | List every rule; JSON includes the rule ID, severity, title, and description |
+| `quantpreflight list-gpus [--format json]` | List bundled GPU profiles; JSON includes every profile field |
 | `quantpreflight validate-profiles` | Check the bundled TOML profiles |
 
 You can pass a GPU alias or architecture such as `rtx4090` or `sm_89`.
